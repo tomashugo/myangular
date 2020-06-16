@@ -19,7 +19,7 @@
     "test": "karma start"
   },
   "dependencies": {
-    "jquery": "2.1.4",
+    "jquery": "3.5.0",
     "lodash": "4.11.1"
   }
 }
