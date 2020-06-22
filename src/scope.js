@@ -12,6 +12,8 @@ function Scope() {
   this.$$postDigestQueue = [];
   this.$$children = [];
   this.$root = this;
+
+  this.$$listeners = {};
 }
 
 Scope.prototype.$$postDigest = function (fn) {
@@ -264,6 +266,7 @@ Scope.prototype.$new = function (isolated, parent) {
   }
   parent.$$children.push(child);
   child.$$watchers = [];
+  child.$$listeners = {};
   child.$$children = [];
   child.$parent = parent;
   return child;
@@ -295,9 +298,14 @@ Scope.prototype.$watchCollection = function (watchFn, listenerFn) {
   var self = this;
   var newValue;
   var oldValue;
+  var oldLength;
+  var veryOldValue;
+  var trackVeryOldValue = listenerFn.length > 1;
   var changeCount = 0;
+  var firstRun = true;
 
   var internalWatchFn = function (scope) {
+    var newLength;
     newValue = watchFn(scope);
 
     if (_.isObject(newValue)) {
@@ -321,6 +329,31 @@ Scope.prototype.$watchCollection = function (watchFn, listenerFn) {
         if (!_.isObject(oldValue) || isArrayLike(oldValue)) {
           changeCount++;
           oldValue = {};
+          oldLength = 0;
+        }
+        newLength = 0;
+        _.forOwn(newValue, function (newVal, key) {
+          newLength++;
+          if (oldValue.hasOwnProperty(key)) {
+            var bothNaN = _.isNaN(newVal) && _.isNaN(oldValue[key]);
+            if (!bothNaN && oldValue[key] !== newVal) {
+              changeCount++;
+              oldValue[key] = newVal;
+            }
+          } else {
+            changeCount++;
+            oldLength++;
+            oldValue[key] = newVal;
+          }
+        });
+        if (oldLength > newLength) {
+          changeCount++;
+          _.forOwn(oldValue, function (oldVal, key) {
+            if (!newValue.hasOwnProperty(key)) {
+              oldLength--;
+              delete oldValue[key];
+            }
+          });
         }
       }
     } else {
@@ -334,7 +367,16 @@ Scope.prototype.$watchCollection = function (watchFn, listenerFn) {
   };
 
   var internalListenerFn = function (scope) {
-    listenerFn(newValue, oldValue, self);
+    if (firstRun) {
+      veryOldValue = newValue;
+      firstRun = false;
+    }
+
+    listenerFn(newValue, veryOldValue, self);
+
+    if (trackVeryOldValue) {
+      veryOldValue = _.clone(newValue);
+    }
   };
   return this.$watch(internalWatchFn, internalListenerFn);
 };
@@ -344,7 +386,31 @@ function isArrayLike(obj) {
     return false;
   }
   var length = obj.length;
-  return _.isNumber(length);
+  return (
+    length === 0 || (_.isNumber(length) && length > 0 && length - 1 in obj)
+  );
 }
+
+Scope.prototype.$on = function (eventName, listener) {
+  var listeners = this.$$listeners[eventName];
+
+  if (!listeners) this.$$listeners[eventName] = listeners = [];
+  listeners.push(listener);
+};
+
+Scope.prototype.$emit = function (eventName) {
+  this.$$fireEventOnScope(eventName);
+};
+
+Scope.prototype.$broadcast = function (eventName) {
+  this.$$fireEventOnScope(eventName);
+};
+
+Scope.prototype.$$fireEventOnScope = function (eventName) {
+  var listeners = this.$$listeners[eventName] || [];
+  _.forEach(listeners, function (listener) {
+    listener();
+  });
+};
 
 module.exports = Scope;
