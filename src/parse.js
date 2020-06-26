@@ -1,5 +1,7 @@
 "use strict";
 
+var _ = require("lodash");
+
 function parse(expr) {
   var lexer = new Lexer();
   var parser = new Parser(lexer);
@@ -22,6 +24,8 @@ Lexer.prototype.lex = function (text) {
       (this.ch === "." && this.isNumber(this.peek()))
     ) {
       this.readNumber();
+    } else if (this.ch === '"' || this.ch === "'") {
+      this.readString(this.ch);
     } else {
       throw "Unexpected next character: " + this.ch;
     }
@@ -40,15 +44,62 @@ Lexer.prototype.isNumber = function (ch) {
   return "0" <= ch && ch <= "9";
 };
 
+Lexer.prototype.isExpOperator = function (ch) {
+  return ch === "-" || ch === "+" || this.isNumber(ch);
+};
+
+Lexer.prototype.readString = function (quote) {
+  this.index++;
+  var string = "";
+
+  while (this.index < this.text.length) {
+    var ch = this.text.charAt(this.index);
+
+    if (ch === quote) {
+      this.index++;
+      this.tokens.push({
+        text: string,
+        value: string,
+      });
+      return;
+    } else {
+      string += ch;
+    }
+
+    this.index++;
+  }
+
+  throw "Unmatched quote";
+};
+
 Lexer.prototype.readNumber = function () {
   var number = "";
 
   while (this.index < this.text.length) {
-    var ch = this.text.charAt(this.index);
+    var ch = this.text.charAt(this.index).toLowerCase();
     if (ch === "." || this.isNumber(ch)) {
       number += ch;
     } else {
-      break;
+      var nextCh = this.peek();
+      var prevCh = number.charAt(number.length - 1);
+      if (ch === "e" && this.isExpOperator(nextCh)) {
+        number += ch;
+      } else if (
+        this.isExpOperator(ch) &&
+        prevCh === "e" &&
+        nextCh &&
+        this.isNumber(nextCh)
+      ) {
+        number += ch;
+      } else if (
+        this.isExpOperator(ch) &&
+        prevCh === "e" &&
+        (!nextCh || !this.isNumber(nextCh))
+      ) {
+        throw "Invalid exponent";
+      } else {
+        break;
+      }
     }
     this.index++;
   }
@@ -96,6 +147,15 @@ function ASTCompiler(astBuilder) {
   this.astBuilder = astBuilder;
 }
 
+ASTCompiler.prototype.escape = function (value) {
+  if (_.isString(value)) {
+    console.log("'" + value + "'");
+    return "'" + value + "'";
+  } else {
+    return value;
+  }
+};
+
 ASTCompiler.prototype.compile = function (text) {
   var ast = this.astBuilder.ast(text);
   this.state = { body: [] };
@@ -111,7 +171,8 @@ ASTCompiler.prototype.recurse = function (ast) {
     case AST.Program:
       this.state.body.push("return ", this.recurse(ast.body), ";");
     case AST.Literal:
-      return ast.value;
+      //console.log(this.escape(ast.value));
+      return this.escape(ast.value);
   }
 };
 
