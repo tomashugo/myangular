@@ -31,8 +31,6 @@ Lexer.prototype.lex = function (text) {
   this.ch = undefined;
   this.tokens = [];
 
-  //console.log("Lexer.prototype.lex");
-
   while (this.index < this.text.length) {
     this.ch = this.text.charAt(this.index);
     if (
@@ -42,7 +40,7 @@ Lexer.prototype.lex = function (text) {
       this.readNumber();
     } else if (this.is('\'"')) {
       this.readString(this.ch);
-    } else if (this.is('[],{}:')) {
+    } else if (this.is('[],{}:.')) {
       this.tokens.push({
         text: this.ch
       });
@@ -204,11 +202,14 @@ AST.ArrayExpression = 'ArrayExpression';
 AST.ObjectExpression = 'ObjectExpression';
 AST.Property = 'Property';
 AST.Identifier = 'Identifier';
+AST.ThisExpression = 'ThisExpression';
+AST.MemberExpression = 'MemberExpression';
 
 AST.prototype.constants = {
   'null': { type: AST.Literal, value: null },
   'true': { type: AST.Literal, value: true },
-  'false': { type: AST.Literal, value: false }
+  'false': { type: AST.Literal, value: false },
+  'this': { type: AST.ThisExpression }
 };
 
 // the Parser object also takes a lexer as argument, and_
@@ -300,21 +301,32 @@ AST.prototype.object = function () {
   return { type: AST.ObjectExpression, properties: properties };
 };
 
+// Primary expressions: arrays, objects, variable, constants adn the dot operator.
+// 
 AST.prototype.primary = function () {
+  var primary;
   if (this.expect('[')) {
-    return this.arrayDeclaration();
+    primary = this.arrayDeclaration();
   } else if (this.expect('{')) {
-    return this.object();
+    primary = this.object();
   }
   else if (this.constants.hasOwnProperty(this.tokens[0].text)) {
-    return this.constants[this.consume().text];
+    primary = this.constants[this.consume().text];
   }
   else if (this.peek().identifier) {
-    return this.identifier();
+    primary = this.identifier();
   }
   else {
-    return this.constant();
+    primary = this.constant();
   }
+  while (this.expect('.')) {
+    primary = {
+      type: AST.MemberExpression,
+      object: primary,
+      property: this.identifier()
+    };
+  }
+  return primary;
 };
 
 AST.prototype.identifier = function () {
@@ -345,6 +357,10 @@ ASTCompiler.prototype.escape = function (value) {
   }
 };
 
+ASTCompiler.prototype.assign = function (id, value) {
+  return id + "=" + value + ";";
+};
+
 ASTCompiler.prototype.if_ = function (test, consequent) {
   this.state.body.push('if(', test, '){', consequent, '}');
 };
@@ -352,11 +368,20 @@ ASTCompiler.prototype.if_ = function (test, consequent) {
 ASTCompiler.prototype.compile = function (text) {
   // console.log("ASTCompiler.prototype.compile");
   var ast = this.astBuilder.ast(text);
-  this.state = { body: [] };
+  this.state = { body: [], nextId: 0, vars: [] };
   this.recurse(ast);
   /* jshint -W054 */
-  return new Function('s', this.state.body.join(''));
+  return new Function('s',
+    (this.state.vars.length ?
+      'var ' + this.state.vars.join(',') + ';' : ''
+    ) + this.state.body.join(''));
   /* jshint +W054 */
+};
+
+ASTCompiler.prototype.nextId = function () {
+  var id = "v" + (this.state.thisId++);
+  this.state.vars.push(id);
+  return id;
 };
 
 ASTCompiler.prototype.nonComputedMember = function (left, right) {
@@ -366,6 +391,7 @@ ASTCompiler.prototype.nonComputedMember = function (left, right) {
 // executes the body of each ast node recursively
 ASTCompiler.prototype.recurse = function (ast) {
   // console.log("ASTCompiler.prototype.recurse");
+  var intoId;
   switch (ast.type) {
     case AST.Program:
       this.state.body.push('return ', this.recurse(ast.body), ';');
@@ -386,10 +412,16 @@ ASTCompiler.prototype.recurse = function (ast) {
       }, this));
       return '{' + properties.join(',') + '}';
     case AST.Identifier:
-      this.state.body.push('var v0;');
-      this.if_('s', 'v0=' + this.nonComputedMember('s', ast.name) + ';');
-
-      return 'v0';
+      intoId = this.nextId();
+      this.if_("s", this.assign(intoId, this.nonComputedMember("s", ast.name)));
+      return intoId;
+    case AST.ThisExpression:
+      return 's';
+    case AST.MemberExpression:
+      intoId = this.nextId();
+      var left = this.recurse(ast.object);
+      this.if_(left, this.assign(intoId, this.nonComputedMember(left, ast.property.name)));
+      return intoId;
   }
 };
 
